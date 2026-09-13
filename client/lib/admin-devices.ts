@@ -11,28 +11,43 @@ export type AdminDevice = {
 
 export type AdminDeviceInput = Omit<AdminDevice, "id">;
 
-const deviceFields = "id, name, model, specifications, amount, status";
+type AdminDevicesResponse = {
+  devices: AdminDevice[];
+  total: number;
+};
+
+type DeviceRequest = {
+  action: "list" | "create" | "update" | "delete";
+  id?: string;
+  device?: AdminDeviceInput;
+};
+
+async function invokeDevices<T>(body: DeviceRequest): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error("Your secure session has expired. Please sign in again.");
+
+  const { data, error } = await supabase.functions.invoke<T>("admin-devices", {
+    body,
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  if (error) throw error;
+  if (!data) throw new Error("Unable to complete the request.");
+  return data;
+}
 
 export async function listAdminDevices(): Promise<AdminDevice[]> {
-  const { data, error } = await supabase
-    .from("devices")
-    .select(deviceFields)
-    .order("name", { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as AdminDevice[];
+  const response = await invokeDevices<AdminDevicesResponse>({ action: "list" });
+  return response.devices;
 }
 
-export async function createAdminDevice(device: AdminDeviceInput) {
-  const { error } = await supabase.from("devices").insert(device);
-  if (error) throw error;
+export function createAdminDevice(device: AdminDeviceInput) {
+  return invokeDevices<AdminDevice>({ action: "create", device });
 }
 
-export async function updateAdminDevice(id: string, device: AdminDeviceInput) {
-  const { error } = await supabase.from("devices").update(device).eq("id", id);
-  if (error) throw error;
+export function updateAdminDevice(id: string, device: AdminDeviceInput) {
+  return invokeDevices<AdminDevice>({ action: "update", id, device });
 }
 
-export async function deleteAdminDevice(id: string) {
-  const { error } = await supabase.from("devices").delete().eq("id", id);
-  if (error) throw error;
+export function deleteAdminDevice(id: string) {
+  return invokeDevices<{ id: string }>({ action: "delete", id });
 }
