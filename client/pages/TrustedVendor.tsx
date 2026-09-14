@@ -22,6 +22,53 @@ import {
   X,
 } from "lucide-react";
 import { vendorDevices, type DeviceCategory, type VendorDevice } from "@/vendor-data";
+import { supabase } from "@/lib/supabase";
+
+type AvailableDeviceRecord = {
+  id: string;
+  name: string;
+  model: string;
+  specifications: string;
+  amount: number | null;
+  image_url: string | null;
+};
+
+const fallbackDeviceImage = vendorDevices[0].image;
+
+async function getAvailableDeviceImage(imageUrl: string | null) {
+  if (!imageUrl) return fallbackDeviceImage;
+  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+  const { data, error } = await supabase.storage.from("device-images").createSignedUrl(imageUrl, 3600);
+  return error || !data?.signedUrl ? fallbackDeviceImage : data.signedUrl;
+}
+
+async function listAvailableDevices(): Promise<VendorDevice[]> {
+  const { data, error } = await supabase
+    .from("devices")
+    .select("id, name, model, specifications, amount, image_url")
+    .eq("status", "Available")
+    .order("name", { ascending: true });
+  if (error) return [];
+
+  return Promise.all(((data ?? []) as AvailableDeviceRecord[]).map(async (device) => ({
+    id: device.id,
+    name: device.name,
+    model: device.model,
+    image: await getAvailableDeviceImage(device.image_url).catch(() => fallbackDeviceImage),
+    imageAlt: `${device.name} device`,
+    price: device.amount,
+    currency: "USD",
+    ram: "—",
+    storage: device.specifications,
+    processor: "—",
+    condition: "Admin inventory",
+    availability: "Available",
+    workDeviceStatus: "Amazon Work Device",
+    description: device.specifications,
+    features: [device.specifications],
+    category: "Laptop",
+  })));
+}
 
 const authenticatedNavItems = [
   ["Dashboard", LayoutDashboard, "/dashboard"],
@@ -191,10 +238,27 @@ export default function TrustedVendor() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
   const [selectedDevice, setSelectedDevice] = useState<VendorDevice | null>(null);
+  const [additionalDevices, setAdditionalDevices] = useState<VendorDevice[]>([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const displayName = session?.user.user_metadata?.full_name || session?.user.email?.split("@")[0] || "Contributor";
   const initials = displayName.split(/\s+/).filter(Boolean).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "CN";
+
+  useEffect(() => {
+    let isMounted = true;
+    void listAvailableDevices()
+      .then((devices) => {
+        if (isMounted) setAdditionalDevices(devices);
+      })
+      .catch(() => {
+        if (isMounted) setAdditionalDevices([]);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const devices = useMemo(() => [...vendorDevices, ...additionalDevices], [additionalDevices]);
 
   const handleLogout = async () => {
     if (isSigningOut) return;
@@ -209,12 +273,12 @@ export default function TrustedVendor() {
 
   const filteredDevices = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return vendorDevices.filter((device) => {
+    return devices.filter((device) => {
       const matchesCategory = category === "All" || device.category === category;
       const matchesQuery = !normalizedQuery || [device.name, device.model, device.processor, device.storage].some((value) => value.toLowerCase().includes(normalizedQuery));
       return matchesCategory && matchesQuery;
     });
-  }, [category, query]);
+  }, [category, devices, query]);
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#f8f9fa] text-ink">
