@@ -11,43 +11,38 @@ export type AdminDevice = {
 
 export type AdminDeviceInput = Omit<AdminDevice, "id">;
 
-type AdminDevicesResponse = {
-  devices: AdminDevice[];
-  total: number;
-};
+const deviceFields = "id, name, model, specifications, amount, status";
 
-type DeviceRequest = {
-  action: "list" | "create" | "update" | "delete";
-  id?: string;
-  device?: AdminDeviceInput;
-};
-
-async function invokeDevices<T>(body: DeviceRequest): Promise<T> {
+async function requireAdminSession() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Your secure session has expired. Please sign in again.");
-
-  const { data, error } = await supabase.functions.invoke<T>("admin-devices", {
-    body,
-    headers: { Authorization: `Bearer ${session.access_token}` },
-  });
-  if (error) throw error;
-  if (!data) throw new Error("Unable to complete the request.");
-  return data;
+  if (session.user.app_metadata?.role !== "admin") throw new Error("Administrator access required.");
 }
 
 export async function listAdminDevices(): Promise<AdminDevice[]> {
-  const response = await invokeDevices<AdminDevicesResponse>({ action: "list" });
-  return response.devices;
+  await requireAdminSession();
+  const { data, error } = await supabase
+    .from("devices")
+    .select(deviceFields)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as AdminDevice[];
 }
 
-export function createAdminDevice(device: AdminDeviceInput) {
-  return invokeDevices<AdminDevice>({ action: "create", device });
+export async function createAdminDevice(device: AdminDeviceInput) {
+  await requireAdminSession();
+  const { error } = await supabase.from("devices").insert(device);
+  if (error) throw error;
 }
 
-export function updateAdminDevice(id: string, device: AdminDeviceInput) {
-  return invokeDevices<AdminDevice>({ action: "update", id, device });
+export async function updateAdminDevice(id: string, device: AdminDeviceInput) {
+  await requireAdminSession();
+  const { error } = await supabase.from("devices").update(device).eq("id", id);
+  if (error) throw error;
 }
 
-export function deleteAdminDevice(id: string) {
-  return invokeDevices<{ id: string }>({ action: "delete", id });
+export async function deleteAdminDevice(id: string) {
+  await requireAdminSession();
+  const { error } = await supabase.from("devices").delete().eq("id", id);
+  if (error) throw error;
 }
