@@ -13,9 +13,9 @@ export type AdminDevice = {
 export type AdminDeviceInput = Omit<AdminDevice, "id" | "imageUrl">;
 
 export const DEVICE_IMAGE_BUCKET = "device-images";
-const deviceFields = "id, name, model, specifications, amount, status";
+const deviceFields = "id, name, model, specifications, amount, status, image_url";
 
-type DeviceRecord = Omit<AdminDevice, "imageUrl">;
+type DeviceRecord = Omit<AdminDevice, "imageUrl"> & { image_url: string | null };
 
 async function requireAdminSession() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -23,20 +23,15 @@ async function requireAdminSession() {
   if (session.user.app_metadata?.role !== "admin") throw new Error("Administrator access required.");
 }
 
-async function getDeviceImageUrl(id: string) {
-  const { data: files, error } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).list(id, {
-    limit: 1,
-    sortBy: { column: "updated_at", order: "desc" },
-  });
-  if (error || !files?.[0]) return null;
-  const { data, error: signedUrlError } = await supabase.storage
-    .from(DEVICE_IMAGE_BUCKET)
-    .createSignedUrl(`${id}/${files[0].name}`, 3600);
-  return signedUrlError ? null : data.signedUrl;
+async function getDeviceImageUrl(path: string | null) {
+  if (!path) return null;
+  const { data, error } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).createSignedUrl(path, 3600);
+  return error ? null : data.signedUrl;
 }
 
 async function withImageUrl(device: DeviceRecord): Promise<AdminDevice> {
-  return { ...device, imageUrl: await getDeviceImageUrl(device.id) };
+  const { image_url, ...deviceFields } = device;
+  return { ...deviceFields, imageUrl: await getDeviceImageUrl(image_url) };
 }
 
 async function listDeviceImagePaths(id: string) {
@@ -80,18 +75,25 @@ export async function updateAdminDevice(id: string, device: AdminDeviceInput): P
 export async function uploadAdminDeviceImage(id: string, file: File) {
   await requireAdminSession();
   const oldPaths = await listDeviceImagePaths(id);
-  if (oldPaths.length > 0) {
-    const { error: removeError } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).remove(oldPaths);
-    if (removeError) throw removeError;
-  }
   const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
   const path = `${id}/image-${crypto.randomUUID()}.${extension}`;
-  const { error } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).upload(path, file, {
+  const { error: uploadError } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).upload(path, file, {
     cacheControl: "3600",
     contentType: file.type || "image/jpeg",
     upsert: false,
   });
-  if (error) throw error;
+  if (uploadError) throw uploadError;
+
+  const { error: updateError } = await supabase.from("devices").update({ image_url: path }).eq("id", id);
+  if (updateError) {
+    await supabase.storage.from(DEVICE_IMAGE_BUCKET).remove([path]);
+    throw updateError;
+  }
+
+  if (oldPaths.length > 0) {
+    const { error: removeError } = await supabase.storage.from(DEVICE_IMAGE_BUCKET).remove(oldPaths);
+    if (removeError) throw removeError;
+  }
 }
 
 export async function deleteAdminDevice(id: string) {
