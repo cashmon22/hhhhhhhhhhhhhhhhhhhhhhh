@@ -30,6 +30,7 @@ type AvailableDeviceRecord = {
   model: string;
   specifications: string;
   amount: number | null;
+  status: string;
   image_url: string | null;
 };
 
@@ -45,10 +46,9 @@ async function getAvailableDeviceImage(imageUrl: string | null) {
 async function listAvailableDevices(): Promise<VendorDevice[]> {
   const { data, error } = await supabase
     .from("devices")
-    .select("id, name, model, specifications, amount, image_url")
-    .eq("status", "Available")
-    .order("name", { ascending: true });
-  if (error) return [];
+    .select("id,name,model,specifications,amount,status,image_url")
+    .eq("status", "Available");
+  if (error) throw error;
 
   return Promise.all(((data ?? []) as AvailableDeviceRecord[]).map(async (device) => ({
     id: device.id,
@@ -239,6 +239,7 @@ export default function TrustedVendor() {
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
   const [selectedDevice, setSelectedDevice] = useState<VendorDevice | null>(null);
   const [additionalDevices, setAdditionalDevices] = useState<VendorDevice[]>([]);
+  const [inventoryError, setInventoryError] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const displayName = session?.user.user_metadata?.full_name || session?.user.email?.split("@")[0] || "Contributor";
@@ -248,10 +249,13 @@ export default function TrustedVendor() {
     let isMounted = true;
     void listAvailableDevices()
       .then((devices) => {
-        if (isMounted) setAdditionalDevices(devices);
+        if (!isMounted) return;
+        setAdditionalDevices(devices);
+        setInventoryError("");
       })
-      .catch(() => {
-        if (isMounted) setAdditionalDevices([]);
+      .catch((loadError) => {
+        if (!isMounted) return;
+        setInventoryError(loadError instanceof Error ? loadError.message : typeof loadError === "object" && loadError !== null && "message" in loadError ? String(loadError.message) : String(loadError));
       });
     return () => {
       isMounted = false;
@@ -316,6 +320,7 @@ export default function TrustedVendor() {
         <section className="bg-[#f8f9fa] px-5 py-14 sm:px-8 lg:py-20">
           <div className="mx-auto max-w-[1240px]">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><SectionEyebrow>Available inventory</SectionEyebrow><h2 className="section-title">Choose your supported device</h2><p className="mt-3 max-w-[590px] text-sm leading-6 text-slate-500">Browse the current selection, open any device for complete specifications, and request payment for your selected device.</p></div><p className="text-xs font-semibold text-slate-400">{filteredDevices.length} {filteredDevices.length === 1 ? "device" : "devices"} available</p></div>
+            {inventoryError && <div className="mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">Unable to load available devices: {inventoryError}</div>}
             {filteredDevices.length > 0 ? <div className="mt-10 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">{filteredDevices.map((device) => <DeviceCard key={device.id} device={device} onOpen={() => setSelectedDevice(device)} />)}</div> : <div className="mt-10 rounded-xl border border-dashed border-slate-300 bg-white px-5 py-14 text-center"><Search size={24} className="mx-auto text-slate-300" /><h3 className="mt-4 text-sm font-extrabold text-navy">No devices match your search</h3><p className="mt-2 text-xs text-slate-500">Try another search or clear the current filter.</p><button type="button" onClick={() => { setQuery(""); setCategory("All"); }} className="mt-5 inline-flex items-center gap-2 rounded-md bg-orange px-4 py-2.5 text-xs font-extrabold text-navy">Clear filters <ArrowRight size={14} /></button></div>}
           </div>
         </section>
